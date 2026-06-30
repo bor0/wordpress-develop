@@ -3992,6 +3992,40 @@ class Tests_Comment_Query extends WP_UnitTestCase {
 	}
 
 	/**
+	 * @covers WP_Comment_Query::query
+	 */
+	public function test_no_found_rows_false_should_use_count_query_for_supported_query() {
+		global $wpdb;
+
+		$post_id = self::factory()->post->create();
+		self::factory()->comment->create_many( 3, array( 'comment_post_ID' => $post_id ) );
+
+		$found_comments_query = '';
+		$filter               = static function ( $sql ) use ( &$found_comments_query ) {
+			$found_comments_query = $sql;
+			return $sql;
+		};
+
+		add_filter( 'found_comments_query', $filter );
+
+		$q = new WP_Comment_Query(
+			array(
+				'post_id'       => $post_id,
+				'number'        => 2,
+				'no_found_rows' => false,
+			)
+		);
+
+		remove_filter( 'found_comments_query', $filter );
+
+		$this->assertStringNotContainsString( 'SQL_CALC_FOUND_ROWS', $q->request );
+		$this->assertStringStartsWith( 'SELECT COUNT(*)', $found_comments_query );
+		$this->assertStringContainsString( "FROM $wpdb->comments", $found_comments_query );
+		$this->assertSame( 3, $q->found_comments );
+		$this->assertSame( 2, $q->max_num_pages );
+	}
+
+	/**
 	 * @ticket 37184
 	 *
 	 * @covers WP_Comment_Query::__construct

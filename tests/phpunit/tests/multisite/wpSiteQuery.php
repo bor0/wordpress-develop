@@ -123,6 +123,35 @@ class Tests_Multisite_wpSiteQuery extends WP_UnitTestCase {
 		$this->assertCount( 3, $found );
 	}
 
+	public function test_wp_site_query_found_sites_should_use_count_query_for_supported_query() {
+		global $wpdb;
+
+		$found_sites_query = '';
+		$filter            = static function ( $sql ) use ( &$found_sites_query ) {
+			$found_sites_query = $sql;
+			return $sql;
+		};
+
+		add_filter( 'found_sites_query', $filter );
+
+		$q     = new WP_Site_Query();
+		$found = $q->query(
+			array(
+				'fields'        => 'ids',
+				'number'        => 3,
+				'no_found_rows' => false,
+			)
+		);
+
+		remove_filter( 'found_sites_query', $filter );
+
+		$this->assertCount( 3, $found );
+		$this->assertStringNotContainsString( 'SQL_CALC_FOUND_ROWS', $q->request );
+		$this->assertStringStartsWith( 'SELECT COUNT(*)', $found_sites_query );
+		$this->assertStringContainsString( "FROM $wpdb->blogs", $found_sites_query );
+		$this->assertGreaterThanOrEqual( 3, $q->found_sites );
+	}
+
 	public function test_wp_site_query_by_site__in_with_single_id() {
 		$expected = array( self::$site_ids['wordpress.org/foo/'] );
 

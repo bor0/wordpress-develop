@@ -3570,7 +3570,7 @@ class WP_Test_REST_Comments_Controller extends WP_Test_REST_Controller_Testcase 
 
 		global $wpdb;
 		$comments_table = preg_quote( $wpdb->comments, '/' );
-		$pattern        = '/^SELECT\s+SQL_CALC_FOUND_ROWS\s+' . $comments_table . '\.comment_ID\s+FROM\s+' . $comments_table . '\s+WHERE/i';
+		$pattern        = '/^SELECT\s+' . $comments_table . '\.comment_ID\s+FROM\s+' . $comments_table . '\s+WHERE/i';
 
 		// Assert that the SQL query only fetches the ID column.
 		$this->assertMatchesRegularExpression( $pattern, $query->request, 'The SQL query does not match the expected string.' );

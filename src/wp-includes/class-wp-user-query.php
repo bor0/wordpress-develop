@@ -42,6 +42,14 @@ class WP_User_Query {
 	private $total_users = 0;
 
 	/**
+	 * SQL for found users query.
+	 *
+	 * @since 6.9.0
+	 * @var string
+	 */
+	private $found_users_query = 'SELECT FOUND_ROWS()';
+
+	/**
 	 * Metadata query container.
 	 *
 	 * @since 4.2.0
@@ -820,6 +828,10 @@ class WP_User_Query {
 		$this->results = apply_filters_ref_array( 'users_pre_query', array( null, &$this ) );
 
 		if ( null === $this->results ) {
+			if ( isset( $qv['count_total'] ) && $qv['count_total'] ) {
+				$this->prepare_found_users_query();
+			}
+
 			// Beginning of the string is on a new line to prevent leading whitespace. See https://core.trac.wordpress.org/ticket/56841.
 			$this->request =
 				"SELECT {$this->query_fields}
@@ -852,13 +864,14 @@ class WP_User_Query {
 					 *
 					 * @since 3.2.0
 					 * @since 5.1.0 Added the `$query` parameter.
+					 * @since 6.9.0 Default query changed to a COUNT query for supported query shapes.
 					 *
 					 * @global wpdb $wpdb WordPress database abstraction object.
 					 *
-					 * @param string        $sql   The SELECT FOUND_ROWS() query for the current WP_User_Query.
+					 * @param string        $sql   The found users query for the current WP_User_Query.
 					 * @param WP_User_Query $query The current WP_User_Query instance.
 					 */
-					$found_users_query = apply_filters( 'found_users_query', 'SELECT FOUND_ROWS()', $this );
+					$found_users_query = apply_filters( 'found_users_query', $this->found_users_query, $this );
 
 					$this->total_users = (int) $wpdb->get_var( $found_users_query );
 				}
@@ -899,6 +912,73 @@ class WP_User_Query {
 
 			$this->results = $r;
 		}
+	}
+
+	/**
+	 * Prepares the SQL used to retrieve found user count.
+	 *
+	 * Leaves SQL_CALC_FOUND_ROWS in the main query for query shapes that should
+	 * continue to use SELECT FOUND_ROWS().
+	 *
+	 * @since 6.9.0
+	 */
+	private function prepare_found_users_query() {
+		$this->found_users_query = $this->get_found_users_query();
+
+		if ( ! $this->found_users_query ) {
+			$this->found_users_query = 'SELECT FOUND_ROWS()';
+			return;
+		}
+
+		$this->query_fields = preg_replace( '/\bSQL_CALC_FOUND_ROWS\s+/i', '', $this->query_fields, 1 );
+	}
+
+	/**
+	 * Generates the query used to retrieve found user count.
+	 *
+	 * Returns an empty string for query shapes that should continue to use
+	 * SQL_CALC_FOUND_ROWS and SELECT FOUND_ROWS().
+	 *
+	 * @since 6.9.0
+	 *
+	 * @global wpdb $wpdb WordPress database abstraction object.
+	 *
+	 * @return string SQL query.
+	 */
+	private function get_found_users_query() {
+		global $wpdb;
+
+		if ( ! preg_match( '/\bSQL_CALC_FOUND_ROWS\b/i', $this->query_fields ) ) {
+			return '';
+		}
+
+		if ( preg_match( '/\b(GROUP\s+BY|HAVING)\b/i', $this->query_from . ' ' . $this->query_where ) ) {
+			return '';
+		}
+
+		$fields = trim( preg_replace( '/\bSQL_CALC_FOUND_ROWS\s+/i', '', $this->query_fields, 1 ) );
+
+		$distinct = false;
+		if ( preg_match( '/^DISTINCT\s+/i', $fields ) ) {
+			$distinct = true;
+			$fields   = trim( preg_replace( '/^DISTINCT\s+/i', '', $fields ) );
+		}
+
+		$normalized_fields        = preg_replace( '/[\s`]+/', '', strtolower( $fields ) );
+		$normalized_primary_field = preg_replace( '/[\s`]+/', '', strtolower( "{$wpdb->users}.ID" ) );
+
+		if ( $normalized_fields !== $normalized_primary_field ) {
+			return '';
+		}
+
+		$count_field = '*';
+		if ( $distinct || preg_match( '/\bJOIN\b/i', $this->query_from ) ) {
+			$count_field = "DISTINCT {$wpdb->users}.ID";
+		}
+
+		return "SELECT COUNT($count_field)
+				 {$this->query_from}
+				 {$this->query_where}";
 	}
 
 	/**

@@ -58,6 +58,35 @@ class Tests_Multisite_wpNetworkQuery extends WP_UnitTestCase {
 		$this->assertCount( 3, $found );
 	}
 
+	public function test_wp_network_query_found_networks_should_use_count_query_for_supported_query() {
+		global $wpdb;
+
+		$found_networks_query = '';
+		$filter               = static function ( $sql ) use ( &$found_networks_query ) {
+			$found_networks_query = $sql;
+			return $sql;
+		};
+
+		add_filter( 'found_networks_query', $filter );
+
+		$q     = new WP_Network_Query();
+		$found = $q->query(
+			array(
+				'fields'        => 'ids',
+				'number'        => 3,
+				'no_found_rows' => false,
+			)
+		);
+
+		remove_filter( 'found_networks_query', $filter );
+
+		$this->assertCount( 3, $found );
+		$this->assertStringNotContainsString( 'SQL_CALC_FOUND_ROWS', $q->request );
+		$this->assertStringStartsWith( 'SELECT COUNT(*)', $found_networks_query );
+		$this->assertStringContainsString( "FROM $wpdb->site", $found_networks_query );
+		$this->assertGreaterThanOrEqual( 3, $q->found_networks );
+	}
+
 	public function test_wp_network_query_by_network__in_with_order() {
 		$expected = array( self::$network_ids['wordpress.org/'], self::$network_ids['make.wordpress.org/'] );
 

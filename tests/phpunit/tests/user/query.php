@@ -181,6 +181,33 @@ class Tests_User_Query extends WP_UnitTestCase {
 		$this->assertSame( 13, $total_users );
 	}
 
+	public function test_count_total_should_use_count_query_for_supported_query() {
+		global $wpdb;
+
+		$found_users_query = '';
+		$filter            = static function ( $sql ) use ( &$found_users_query ) {
+			$found_users_query = $sql;
+			return $sql;
+		};
+
+		add_filter( 'found_users_query', $filter );
+
+		$users = new WP_User_Query(
+			array(
+				'blog_id'       => get_current_blog_id(),
+				'number'        => 5,
+				'cache_results' => false,
+			)
+		);
+
+		remove_filter( 'found_users_query', $filter );
+
+		$this->assertStringNotContainsString( 'SQL_CALC_FOUND_ROWS', $users->request );
+		$this->assertStringStartsWith( 'SELECT COUNT(*)', $found_users_query );
+		$this->assertStringContainsString( "FROM $wpdb->users", $found_users_query );
+		$this->assertSame( 13, $users->get_total() );
+	}
+
 	/**
 	 * @dataProvider data_orderby_should_convert_non_prefixed_keys
 	 */

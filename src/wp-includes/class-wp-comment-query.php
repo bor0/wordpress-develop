@@ -57,6 +57,14 @@ class WP_Comment_Query {
 	);
 
 	/**
+	 * SQL for found comments query.
+	 *
+	 * @since 6.9.0
+	 * @var string
+	 */
+	protected $found_comments_query = 'SELECT FOUND_ROWS()';
+
+	/**
 	 * SQL WHERE clause.
 	 *
 	 * Stored after the {@see 'comments_clauses'} filter is run on the compiled WHERE sub-clauses.
@@ -955,7 +963,8 @@ class WP_Comment_Query {
 		 * }
 		 * @param WP_Comment_Query $query   Current instance of WP_Comment_Query (passed by reference).
 		 */
-		$clauses = apply_filters_ref_array( 'comments_clauses', array( compact( $pieces ), &$this ) );
+		$unfiltered_clauses = compact( $pieces );
+		$clauses            = apply_filters_ref_array( 'comments_clauses', array( $unfiltered_clauses, &$this ) );
 
 		$fields  = $clauses['fields'] ?? '';
 		$join    = $clauses['join'] ?? '';
@@ -963,6 +972,8 @@ class WP_Comment_Query {
 		$orderby = $clauses['orderby'] ?? '';
 		$limits  = $clauses['limits'] ?? '';
 		$groupby = $clauses['groupby'] ?? '';
+
+		$clauses_changed = $clauses !== $unfiltered_clauses;
 
 		$this->filtered_where_clause = $where;
 
@@ -980,7 +991,12 @@ class WP_Comment_Query {
 
 		$found_rows = '';
 		if ( ! $this->query_vars['no_found_rows'] ) {
-			$found_rows = 'SQL_CALC_FOUND_ROWS';
+			$this->found_comments_query = $this->get_found_comments_query( $join, $where, $groupby, $clauses_changed );
+
+			if ( ! $this->found_comments_query ) {
+				$this->found_comments_query = 'SELECT FOUND_ROWS()';
+				$found_rows                 = 'SQL_CALC_FOUND_ROWS';
+			}
 		}
 
 		$this->sql_clauses['select']  = "SELECT $found_rows $fields";
@@ -1007,6 +1023,48 @@ class WP_Comment_Query {
 	}
 
 	/**
+	 * Generates the query used to retrieve found comment count.
+	 *
+	 * Returns an empty string for query shapes that should continue to use
+	 * SQL_CALC_FOUND_ROWS and SELECT FOUND_ROWS().
+	 *
+	 * @since 6.9.0
+	 *
+	 * @global wpdb $wpdb WordPress database abstraction object.
+	 *
+	 * @param string $join            JOIN clause of the query.
+	 * @param string $where           WHERE clause of the query.
+	 * @param string $groupby         GROUP BY clause of the query.
+	 * @param bool   $clauses_changed Whether the query clauses were changed by a filter.
+	 * @return string SQL query.
+	 */
+	private function get_found_comments_query( $join, $where, $groupby, $clauses_changed ) {
+		global $wpdb;
+
+		if ( $this->query_vars['count'] || ! $this->query_vars['number'] || $clauses_changed ) {
+			return '';
+		}
+
+		$count_field = '*';
+		if ( $groupby ) {
+			$normalized_groupby = preg_replace( '/\s+/', '', strtolower( $groupby ) );
+			$primary_groupby    = preg_replace( '/\s+/', '', strtolower( "GROUP BY {$wpdb->comments}.comment_ID" ) );
+
+			if ( $normalized_groupby !== $primary_groupby ) {
+				return '';
+			}
+
+			$count_field = "DISTINCT {$wpdb->comments}.comment_ID";
+		} elseif ( $join ) {
+			$count_field = "DISTINCT {$wpdb->comments}.comment_ID";
+		}
+
+		return "SELECT COUNT($count_field)
+			 FROM {$wpdb->comments} $join
+			 $where";
+	}
+
+	/**
 	 * Populates found_comments and max_num_pages properties for the current
 	 * query if the limit clause was used.
 	 *
@@ -1022,11 +1080,13 @@ class WP_Comment_Query {
 			 * Filters the query used to retrieve found comment count.
 			 *
 			 * @since 4.4.0
+			 * @since 6.9.0 Default query changed to a COUNT query for supported query shapes.
 			 *
-			 * @param string           $found_comments_query SQL query. Default 'SELECT FOUND_ROWS()'.
+			 * @param string           $found_comments_query SQL query. Default is a COUNT query for
+			 *                                             supported query shapes, otherwise 'SELECT FOUND_ROWS()'.
 			 * @param WP_Comment_Query $comment_query        The `WP_Comment_Query` instance.
 			 */
-			$found_comments_query = apply_filters( 'found_comments_query', 'SELECT FOUND_ROWS()', $this );
+			$found_comments_query = apply_filters( 'found_comments_query', $this->found_comments_query, $this );
 
 			$this->found_comments = (int) $wpdb->get_var( $found_comments_query );
 		}

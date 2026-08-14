@@ -41,6 +41,14 @@ class WP_Site_Query {
 	);
 
 	/**
+	 * SQL for found sites query.
+	 *
+	 * @since 6.9.0
+	 * @var string
+	 */
+	protected $found_sites_query = 'SELECT FOUND_ROWS()';
+
+	/**
 	 * Metadata query container.
 	 *
 	 * @since 5.1.0
@@ -672,7 +680,8 @@ class WP_Site_Query {
 		 * }
 		 * @param WP_Site_Query $query   Current instance of WP_Site_Query (passed by reference).
 		 */
-		$clauses = apply_filters_ref_array( 'sites_clauses', array( compact( $pieces ), &$this ) );
+		$unfiltered_clauses = compact( $pieces );
+		$clauses            = apply_filters_ref_array( 'sites_clauses', array( $unfiltered_clauses, &$this ) );
 
 		$fields  = $clauses['fields'] ?? '';
 		$join    = $clauses['join'] ?? '';
@@ -680,6 +689,8 @@ class WP_Site_Query {
 		$orderby = $clauses['orderby'] ?? '';
 		$limits  = $clauses['limits'] ?? '';
 		$groupby = $clauses['groupby'] ?? '';
+
+		$clauses_changed = $clauses !== $unfiltered_clauses;
 
 		if ( $where ) {
 			$where = 'WHERE ' . $where;
@@ -695,7 +706,12 @@ class WP_Site_Query {
 
 		$found_rows = '';
 		if ( ! $this->query_vars['no_found_rows'] ) {
-			$found_rows = 'SQL_CALC_FOUND_ROWS';
+			$this->found_sites_query = $this->get_found_sites_query( $join, $where, $groupby, $clauses_changed );
+
+			if ( ! $this->found_sites_query ) {
+				$this->found_sites_query = 'SELECT FOUND_ROWS()';
+				$found_rows              = 'SQL_CALC_FOUND_ROWS';
+			}
 		}
 
 		$this->sql_clauses['select']  = "SELECT $found_rows $fields";
@@ -723,6 +739,48 @@ class WP_Site_Query {
 	}
 
 	/**
+	 * Generates the query used to retrieve found site count.
+	 *
+	 * Returns an empty string for query shapes that should continue to use
+	 * SQL_CALC_FOUND_ROWS and SELECT FOUND_ROWS().
+	 *
+	 * @since 6.9.0
+	 *
+	 * @global wpdb $wpdb WordPress database abstraction object.
+	 *
+	 * @param string $join            JOIN clause of the query.
+	 * @param string $where           WHERE clause of the query.
+	 * @param string $groupby         GROUP BY clause of the query.
+	 * @param bool   $clauses_changed Whether the query clauses were changed by a filter.
+	 * @return string SQL query.
+	 */
+	private function get_found_sites_query( $join, $where, $groupby, $clauses_changed ) {
+		global $wpdb;
+
+		if ( $this->query_vars['count'] || ! $this->query_vars['number'] || $clauses_changed ) {
+			return '';
+		}
+
+		$count_field = '*';
+		if ( $groupby ) {
+			$normalized_groupby = preg_replace( '/\s+/', '', strtolower( $groupby ) );
+			$primary_groupby    = preg_replace( '/\s+/', '', strtolower( "GROUP BY {$wpdb->blogs}.blog_id" ) );
+
+			if ( $normalized_groupby !== $primary_groupby ) {
+				return '';
+			}
+
+			$count_field = "DISTINCT {$wpdb->blogs}.blog_id";
+		} elseif ( $join ) {
+			$count_field = "DISTINCT {$wpdb->blogs}.blog_id";
+		}
+
+		return "SELECT COUNT($count_field)
+			 FROM {$wpdb->blogs} $join
+			 $where";
+	}
+
+	/**
 	 * Populates found_sites and max_num_pages properties for the current query
 	 * if the limit clause was used.
 	 *
@@ -738,11 +796,13 @@ class WP_Site_Query {
 			 * Filters the query used to retrieve found site count.
 			 *
 			 * @since 4.6.0
+			 * @since 6.9.0 Default query changed to a COUNT query for supported query shapes.
 			 *
-			 * @param string        $found_sites_query SQL query. Default 'SELECT FOUND_ROWS()'.
+			 * @param string        $found_sites_query SQL query. Default is a COUNT query for
+			 *                                          supported query shapes, otherwise 'SELECT FOUND_ROWS()'.
 			 * @param WP_Site_Query $site_query        The `WP_Site_Query` instance.
 			 */
-			$found_sites_query = apply_filters( 'found_sites_query', 'SELECT FOUND_ROWS()', $this );
+			$found_sites_query = apply_filters( 'found_sites_query', $this->found_sites_query, $this );
 
 			$this->found_sites = (int) $wpdb->get_var( $found_sites_query );
 		}

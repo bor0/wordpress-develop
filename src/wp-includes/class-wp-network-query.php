@@ -48,6 +48,14 @@ class WP_Network_Query {
 	);
 
 	/**
+	 * SQL for found networks query.
+	 *
+	 * @since 6.9.0
+	 * @var string
+	 */
+	protected $found_networks_query = 'SELECT FOUND_ROWS()';
+
+	/**
 	 * Query vars set by the user.
 	 *
 	 * @since 4.6.0
@@ -467,7 +475,8 @@ class WP_Network_Query {
 		 * }
 		 * @param WP_Network_Query $query   Current instance of WP_Network_Query (passed by reference).
 		 */
-		$clauses = apply_filters_ref_array( 'networks_clauses', array( compact( $pieces ), &$this ) );
+		$unfiltered_clauses = compact( $pieces );
+		$clauses            = apply_filters_ref_array( 'networks_clauses', array( $unfiltered_clauses, &$this ) );
 
 		$fields  = $clauses['fields'] ?? '';
 		$join    = $clauses['join'] ?? '';
@@ -475,6 +484,8 @@ class WP_Network_Query {
 		$orderby = $clauses['orderby'] ?? '';
 		$limits  = $clauses['limits'] ?? '';
 		$groupby = $clauses['groupby'] ?? '';
+
+		$clauses_changed = $clauses !== $unfiltered_clauses;
 
 		if ( $where ) {
 			$where = 'WHERE ' . $where;
@@ -490,7 +501,12 @@ class WP_Network_Query {
 
 		$found_rows = '';
 		if ( ! $this->query_vars['no_found_rows'] ) {
-			$found_rows = 'SQL_CALC_FOUND_ROWS';
+			$this->found_networks_query = $this->get_found_networks_query( $join, $where, $groupby, $clauses_changed );
+
+			if ( ! $this->found_networks_query ) {
+				$this->found_networks_query = 'SELECT FOUND_ROWS()';
+				$found_rows                 = 'SQL_CALC_FOUND_ROWS';
+			}
 		}
 
 		$this->sql_clauses['select']  = "SELECT $found_rows $fields";
@@ -518,6 +534,48 @@ class WP_Network_Query {
 	}
 
 	/**
+	 * Generates the query used to retrieve found network count.
+	 *
+	 * Returns an empty string for query shapes that should continue to use
+	 * SQL_CALC_FOUND_ROWS and SELECT FOUND_ROWS().
+	 *
+	 * @since 6.9.0
+	 *
+	 * @global wpdb $wpdb WordPress database abstraction object.
+	 *
+	 * @param string $join            JOIN clause of the query.
+	 * @param string $where           WHERE clause of the query.
+	 * @param string $groupby         GROUP BY clause of the query.
+	 * @param bool   $clauses_changed Whether the query clauses were changed by a filter.
+	 * @return string SQL query.
+	 */
+	private function get_found_networks_query( $join, $where, $groupby, $clauses_changed ) {
+		global $wpdb;
+
+		if ( $this->query_vars['count'] || ! $this->query_vars['number'] || $clauses_changed ) {
+			return '';
+		}
+
+		$count_field = '*';
+		if ( $groupby ) {
+			$normalized_groupby = preg_replace( '/\s+/', '', strtolower( $groupby ) );
+			$primary_groupby    = preg_replace( '/\s+/', '', strtolower( "GROUP BY {$wpdb->site}.id" ) );
+
+			if ( $normalized_groupby !== $primary_groupby ) {
+				return '';
+			}
+
+			$count_field = "DISTINCT {$wpdb->site}.id";
+		} elseif ( $join ) {
+			$count_field = "DISTINCT {$wpdb->site}.id";
+		}
+
+		return "SELECT COUNT($count_field)
+			 FROM {$wpdb->site} $join
+			 $where";
+	}
+
+	/**
 	 * Populates found_networks and max_num_pages properties for the current query
 	 * if the limit clause was used.
 	 *
@@ -533,11 +591,13 @@ class WP_Network_Query {
 			 * Filters the query used to retrieve found network count.
 			 *
 			 * @since 4.6.0
+			 * @since 6.9.0 Default query changed to a COUNT query for supported query shapes.
 			 *
-			 * @param string           $found_networks_query SQL query. Default 'SELECT FOUND_ROWS()'.
+			 * @param string           $found_networks_query SQL query. Default is a COUNT query for
+			 *                                             supported query shapes, otherwise 'SELECT FOUND_ROWS()'.
 			 * @param WP_Network_Query $network_query        The `WP_Network_Query` instance.
 			 */
-			$found_networks_query = apply_filters( 'found_networks_query', 'SELECT FOUND_ROWS()', $this );
+			$found_networks_query = apply_filters( 'found_networks_query', $this->found_networks_query, $this );
 
 			$this->found_networks = (int) $wpdb->get_var( $found_networks_query );
 		}
